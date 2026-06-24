@@ -1,0 +1,6 @@
+﻿# 场景：逐步观察电梯移动
+INT 1 3
+STEP 1
+STEP 1
+STEP 1
+SHOW

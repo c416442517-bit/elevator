@@ -1,0 +1,8 @@
+﻿# 场景：连续两次紧急，验证任务备份栈
+INT 1 8
+EMERGENCY
+RECOVER
+EMERGENCY
+RECOVER
+SHOW
+RUN

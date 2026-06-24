@@ -1,0 +1,8 @@
+﻿# 场景：多步运行并穿插显示状态
+INT 1 4
+INT 2 6
+STEP 2
+SHOW
+STEP 2
+SHOW
+RUN

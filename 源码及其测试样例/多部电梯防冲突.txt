@@ -1,0 +1,7 @@
+﻿# 场景：相向而行不发生冲突
+INT 1 10
+INT 2 1
+STEP 2
+EXT 8 1
+SHOW
+RUN

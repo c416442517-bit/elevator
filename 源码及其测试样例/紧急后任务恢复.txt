@@ -1,0 +1,8 @@
+﻿# 场景：紧急结束恢复原任务继续服务
+INT 1 5
+INT 2 3
+EMERGENCY
+SHOW
+RECOVER
+SHOW
+RUN

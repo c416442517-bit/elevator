@@ -1,0 +1,9 @@
+﻿# 场景：紧急时外部按钮无效，恢复后处理
+INT 1 6
+STEP 1
+EMERGENCY
+EXT 8 1
+SHOW
+RECOVER
+SHOW
+RUN

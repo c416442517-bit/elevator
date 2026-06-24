@@ -1,0 +1,10 @@
+﻿# 场景：水浸紧急，进水楼层3，电梯应前往5层
+INT 1 8
+INT 2 6
+STEP 2
+SHOW
+EMERGENCY FLOOD 3
+SHOW
+RECOVER
+SHOW
+RUN

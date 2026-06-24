@@ -1,0 +1,6 @@
+﻿# 场景：管理员远程控制电梯门
+MANUAL 2 2 1
+SHOW
+STEP 1
+MANUAL 2 2 0
+SHOW

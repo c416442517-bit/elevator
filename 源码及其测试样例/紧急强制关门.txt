@@ -1,0 +1,5 @@
+﻿# 场景：开门瞬间紧急，强制关门
+INT 1 1
+STEP 1
+EMERGENCY
+SHOW
