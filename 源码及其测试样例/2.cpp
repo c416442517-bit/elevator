@@ -43,10 +43,9 @@ struct ExternalReq {
 };
 
 /**
- * 乘客信息结构体：体重(kg)和目标楼层
+ * 乘客信息：仅记录目标楼层（体重由电梯自动按平均值计算）
  */
 struct Passenger {
-    double weight;   // 体重(kg)
     int target;      // 目标楼层
 };
 
@@ -62,9 +61,10 @@ public:
     vector<int> tasks;      // 任务列表：需要停靠的楼层
 
     // 载重相关
-    static constexpr double MAX_LOAD = 1000.0;   // 最大承重(kg)，可根据需要修改
-    vector<Passenger> passengers;                // 电梯内乘客列表（体重+目标）
-    double currentLoad;                          // 当前总载重(kg)
+    static constexpr double MAX_LOAD = 1000.0;        // 最大承重(kg)，可根据需要修改
+    static constexpr double AVG_WEIGHT_PER_PERSON = 70.0;  // 人均体重(kg)，模拟传感器
+    vector<Passenger> passengers;                     // 电梯内乘客（仅目标楼层）
+    double currentLoad;                               // 当前总载重(kg)（人数 × 人均体重）
 
     /**
      * 构造函数：初始化电梯，默认停在1层（若1不可达则停在最低层），门关，无任务
@@ -84,39 +84,42 @@ public:
     /** 当前载客人数 */
     int passengerCount() const { return (int)passengers.size(); }
 
+    /** 判断电梯是否已满载（无法再容纳至少一名标准体重乘客） */
+    bool isFull() const {
+        return currentLoad + AVG_WEIGHT_PER_PERSON > MAX_LOAD;
+    }
+
     /**
-     * 尝试让一名乘客上梯
+     * 尝试让一名乘客上梯（自动按人均体重计算载重增量）
      * @param targetFloor 乘客目标楼层
-     * @param weight      乘客体重(kg)
      * @return 上梯是否成功（未超重且楼层合法）
      */
-    bool boardPassenger(int targetFloor, double weight) {
-        if (currentLoad + weight > MAX_LOAD) {
+    bool boardPassenger(int targetFloor) {
+        if (currentLoad + AVG_WEIGHT_PER_PERSON > MAX_LOAD) {
             cout << "电梯 " << id+1 << " 超重！当前载重 " << currentLoad 
-                 << " kg，上限 " << MAX_LOAD << " kg，无法上客。\n";
+                 << " kg（约 " << passengerCount() << " 人），上限 " << MAX_LOAD << " kg，无法上客。\n";
             return false;
         }
-        passengers.push_back({weight, targetFloor});
-        currentLoad += weight;
-        addTask(targetFloor);          // 自动加入送客任务
+        passengers.push_back({targetFloor});
+        currentLoad += AVG_WEIGHT_PER_PERSON;   // 传感器自动增加平均体重
+        addTask(targetFloor);                    // 自动加入送客任务
         return true;
     }
 
     /**
-     * 在指定楼层下客（所有目标为该楼层的乘客下车）
+     * 在指定楼层下客（所有目标为该楼层的乘客下车，按人均体重减重）
      * @param floor 当前楼层
      */
     void alightPassengersAt(int floor) {
         auto it = remove_if(passengers.begin(), passengers.end(),
                             [floor](const Passenger& p) { return p.target == floor; });
         if (it != passengers.end()) {
-            double alightedWeight = 0.0;
-            for (auto i = it; i != passengers.end(); ++i) alightedWeight += i->weight;
-            currentLoad -= alightedWeight;
+            int alightedCount = (int)(passengers.end() - it);
             passengers.erase(it, passengers.end());
-            if (alightedWeight > 0)
-                cout << "电梯 " << id+1 << " 在 " << floor << " 层下客，减少载重 " 
-                     << alightedWeight << " kg，当前载重 " << currentLoad << " kg\n";
+            double reducedWeight = alightedCount * AVG_WEIGHT_PER_PERSON;
+            currentLoad -= reducedWeight;
+            cout << "电梯 " << id+1 << " 在 " << floor << " 层下客 " << alightedCount 
+                 << " 人，减少载重 " << reducedWeight << " kg，当前载重 " << currentLoad << " kg\n";
         }
     }
 
@@ -230,6 +233,10 @@ int chooseBestElevator(int floor, int dir) {
     int bestCost = INT_MAX;
     for (size_t i = 0; i < elevators.size(); ++i) {
         Elevator &e = elevators[i];
+
+        // 满载电梯无法再接人，直接跳过（代价无穷大）
+        if (e.isFull()) continue;
+
         int cost = abs(e.curFloor - floor);   // 基础距离代价
 
         // 方向惩罚：如果电梯当前运行方向与请求方向相反且请求楼层在电梯后方，则代价大幅增加
@@ -257,15 +264,20 @@ void dispatchRequests() {
         return;
     }
     while (!extQueue.empty()) {
-        ExternalReq req = extQueue.front();
-        extQueue.pop();
+        ExternalReq req = extQueue.front();   // 查看队首，不立即弹出
         int best = chooseBestElevator(req.floor, req.dir);
-        if (best != -1) {
-            elevators[best].addTask(req.floor);
-            cout << "[调度] 外部请求 " << req.floor << " 层 "
+        if (best == -1) {
+            // 无法分配（全部满载或紧急），保留请求等待下次调度
+            cout << "[调度] 请求 " << req.floor << " 层 "
                  << (req.dir == DIR_UP ? "↑" : "↓")
-                 << " 分配给电梯 " << best+1 << endl;
+                 << " 暂时无法分配（可能全部满载），等待下次调度。\n";
+            break;
         }
+        extQueue.pop();   // 确认能分配后再弹出
+        elevators[best].addTask(req.floor);
+        cout << "[调度] 外部请求 " << req.floor << " 层 "
+             << (req.dir == DIR_UP ? "↑" : "↓")
+             << " 分配给电梯 " << best+1 << endl;
     }
 }
 
@@ -611,7 +623,7 @@ void resetSystem() {
  * 支持的命令：
  *   EXT floor dir         - 添加外部请求
  *   INT elevatorId floor  - 添加内部请求（指定电梯）
- *   BOARD eid target weight - 模拟乘客上梯（电梯号 目标楼层 体重kg）
+ *   BOARD eid target      - 模拟乘客上梯（电梯号 目标楼层）
  *   EMERGENCY [类型]      - 触发紧急模式（FIRE/FAULT/FLOOD/EARTHQUAKE）
  *   RECOVER               - 解除紧急模式
  *   STEP steps            - 单步运行指定步数
@@ -672,8 +684,7 @@ void runTestFromFile(const string& filename) {
         }
         else if (cmd == "BOARD") {
             int eid, target;
-            double weight;
-            iss >> eid >> target >> weight;
+            iss >> eid >> target;
             if (eid<1 || eid>g_elevatorNum) {
                 cout << "[文件] 错误：电梯编号超出范围\n";
                 continue;
@@ -686,11 +697,10 @@ void runTestFromFile(const string& filename) {
                 cout << "[文件] 紧急模式，禁止上客。\n";
                 continue;
             }
-            bool ok = elevators[eid-1].boardPassenger(target, weight);
+            bool ok = elevators[eid-1].boardPassenger(target);
             if (ok)
                 cout << "[文件] 电梯" << eid << " 上客成功，去往 " << target 
-                     << " 层，体重 " << weight << " kg，当前载重 " 
-                     << elevators[eid-1].currentLoad << " kg\n";
+                     << " 层，当前载重 " << elevators[eid-1].currentLoad << " kg\n";
             else
                 cout << "[文件] 电梯" << eid << " 上客失败（超重）\n";
         }
@@ -768,35 +778,13 @@ void runTestFromFile(const string& filename) {
 }
 
 /**
- * 显示预置的24个测试样例列表，用户选择后自动执行
- * 样例覆盖基本调度、紧急模式、水浸、管理员干预等场景
+ * 显示预置的测试样例列表（可根据需要自行扩充）
  */
 void runSample() {
     vector<string> samples = {
-        "基本单请求调度.txt",
-        "同层请求立即响应.txt",
-        "两部电梯同向协作.txt",
-        "反向请求方向惩罚.txt",
-        "电梯任务顺序优化.txt",
-        "多部电梯防冲突.txt",
-        "紧急模式触发.txt",
-        "紧急模式下外部请求.txt",
-        "紧急后任务恢复.txt",
-        "紧急强制关门.txt",
-        "管理员强制添加任务.txt",
-        "管理员强制开关门.txt",
-        "管理员内部请求.txt",
-        "高负载多请求并发.txt",
-        "边界楼层测试.txt",
-        "过程状态显示.txt",
-        "单步调试模式.txt",
-        "两部电梯兼容性.txt",
-        "多次紧急模式.txt",
-        "综合场景演示.txt",
-        "水浸紧急模式.txt",
-        "水浸紧急模式-进水3层.txt",
-        "水浸紧急模式-进水5层.txt",
-        "水浸紧急模式-进水8层.txt"
+        "火灾有人测试.txt",
+        "火灾无人测试.txt",
+        "地震测试.txt"
     };
 
     while (true) {
@@ -805,7 +793,6 @@ void runSample() {
             cout << i+1 << ". " << samples[i] << endl;
         }
         cout << "0. 返回主菜单\n";
-        cout << "请选择样例编号 (1~24): ";
         int choice;
         cin >> choice;
         if (choice == 0) break;
@@ -856,7 +843,7 @@ int main() {
         cout << "6. 紧急模式\n";
         cout << "7. 解除紧急模式\n";
         cout << "8. 管理员手动控制\n";
-        cout << "9. 模拟乘客上梯（指定体重）\n";
+        cout << "9. 模拟乘客上梯\n";
         cout << "0. 从文件运行测试\n";
         cout << "q. 退出\n";
         cout << "请选择: ";
@@ -907,15 +894,13 @@ int main() {
             case '8': manualControl(); break;
             case '9': {
                 int eid, target;
-                double weight;
                 cout << "电梯编号(1~" << g_elevatorNum << "): "; cin >> eid;
                 cout << "目标楼层: "; cin >> target;
-                cout << "乘客体重(kg): "; cin >> weight;
-                if (eid >= 1 && eid <= g_elevatorNum && isValidFloor(target) && weight > 0) {
+                if (eid >= 1 && eid <= g_elevatorNum && isValidFloor(target)) {
                     if (g_emergencyActive) {
                         cout << "紧急模式中，禁止上客。\n";
                     } else {
-                        bool ok = elevators[eid-1].boardPassenger(target, weight);
+                        bool ok = elevators[eid-1].boardPassenger(target);
                         if (!ok) cout << "上客失败。\n";
                     }
                 } else {
