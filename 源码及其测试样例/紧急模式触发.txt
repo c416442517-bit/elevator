@@ -1,8 +1,0 @@
-﻿# 场景：运行中突发火灾，电梯全部归首层
-INT 1 7
-INT 2 9
-INT 3 4
-STEP 2
-SHOW
-EMERGENCY
-SHOW

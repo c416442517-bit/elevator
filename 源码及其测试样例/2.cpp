@@ -36,10 +36,14 @@ bool g_emergencyActive = false;
 /**
  * 外部呼叫请求结构体
  * 当乘客在某一楼层按下上行/下行按钮时产生
+ * 动态分配版本新增字段：assignedElevator（当前分配的电梯索引，-1表示未分配）
+ *                    completed（该请求是否已完成服务）
  */
 struct ExternalReq {
-    int floor;  // 请求所在楼层
-    int dir;    // 请求方向：DIR_UP 或 DIR_DOWN
+    int floor;               // 请求所在楼层
+    int dir;                 // 请求方向：DIR_UP 或 DIR_DOWN
+    int assignedElevator;    // 动态分配：当前负责该请求的电梯编号（-1为未分配）
+    bool completed;          // 动态分配：服务是否已完成（完成后将被清除）
 };
 
 /**
@@ -51,6 +55,7 @@ struct Passenger {
 
 /**
  * 电梯类：封装单部电梯的所有属性和行为
+ * 动态分配版本：任务列表中的负数表示外部接客任务，正数为内部送客任务
  */
 class Elevator {
 public:
@@ -58,7 +63,7 @@ public:
     int curFloor;           // 当前所在楼层
     int direction;          // 当前运动方向（上/下/停）
     bool isOpen;            // 门状态：true开，false关
-    vector<int> tasks;      // 任务列表：需要停靠的楼层
+    vector<int> tasks;      // 任务列表：需要停靠的楼层（正数=内部送客，负数=-外部接客楼层）
 
     // 载重相关
     static constexpr double MAX_LOAD = 1000.0;        // 最大承重(kg)，可根据需要修改
@@ -102,7 +107,7 @@ public:
         }
         passengers.push_back({targetFloor});
         currentLoad += AVG_WEIGHT_PER_PERSON;   // 传感器自动增加平均体重
-        addTask(targetFloor);                    // 自动加入送客任务
+        addTask(targetFloor);                    // 自动加入送客任务（正数楼层）
         return true;
     }
 
@@ -132,54 +137,66 @@ public:
     /**
      * 添加一个新任务（楼层），并重新规划任务顺序以提高效率
      * 如果请求楼层等于当前楼层，则直接开门完成服务，不加入任务列表
-     * @param floor 目标楼层
+     * @param floor      目标楼层（正数=内部请求，负数=外部请求）
+     * @param isExternal 是否为外部请求（用于将楼层转为负数存储）
      */
-    void addTask(int floor) {
-        if (floor == curFloor) {
+    void addTask(int floor, bool isExternal = false) {
+        int taskFloor = isExternal ? -floor : floor;   // 外部请求存储为负数，内部请求保持正数
+        if (taskFloor == curFloor || -taskFloor == curFloor) {
             // 同层请求：直接开门完成
             if (!isOpen) {
                 isOpen = true;
                 cout << "电梯 " << id+1 << " 在 " << curFloor << " 层已开门（同层响应）\n";
+                // 外部请求会在 moveOneStep 中标记完成，此处仅模拟开门
                 isOpen = false;
                 cout << "电梯 " << id+1 << " 关门（服务完成）\n";
             }
             return;
         }
-        tasks.push_back(floor);
+        tasks.push_back(taskFloor);
         optimizeTasks();    // 每次添加后优化顺序
+    }
+
+    /**
+     * 专门添加外部请求任务（传入正数楼层，内部转为负数）
+     */
+    void addExternalTask(int floor) {
+        addTask(floor, true);
     }
 
     /**
      * 优化任务列表顺序：根据当前楼层和方向，将同向任务优先执行
      * 采用简化的LOOK算法：先处理与当前方向同向的任务，再反向
+     * 动态分配版本：任务可能为负数（外部请求），按绝对值处理
      */
     void optimizeTasks() {
         if (tasks.empty()) return;
 
-        // 先按楼层升序排序
-        sort(tasks.begin(), tasks.end());
+        // 先按绝对值升序排序
+        sort(tasks.begin(), tasks.end(), [](int a, int b) {
+            return abs(a) < abs(b);
+        });
 
-        // 将任务分为上行任务（大于当前楼层）和下行任务（小于当前楼层）
+        // 将任务分为上行任务（绝对值大于当前楼层）和下行任务（绝对值小于当前楼层）
         vector<int> up, down;
         for (int f : tasks) {
-            if (f > curFloor) up.push_back(f);
-            else if (f < curFloor) down.push_back(f);
+            int absF = abs(f);
+            if (absF > curFloor) up.push_back(f);
+            else if (absF < curFloor) down.push_back(f);
             // 等于当前楼层的任务忽略（已在当前层，后续到达时会立即处理）
         }
 
-        // 分别排序：上行升序，下行降序（这样下行时先从高楼层往低走）
-        sort(up.begin(), up.end());
-        sort(down.begin(), down.end(), greater<int>());
+        // 分别排序：上行升序（按绝对值），下行降序（按绝对值）
+        sort(up.begin(), up.end(), [](int a, int b) { return abs(a) < abs(b); });
+        sort(down.begin(), down.end(), [](int a, int b) { return abs(a) > abs(b); });
 
         tasks.clear();
 
         // 根据当前方向决定任务顺序
-        // 如果当前向上 或 停止且有待处理的上行任务，则优先上行
         if (direction == DIR_UP || (direction == DIR_STOP && !up.empty())) {
             for (int f : up) tasks.push_back(f);    // 先上
             for (int f : down) tasks.push_back(f);  // 后下
         } else {
-            // 否则优先下行
             for (int f : down) tasks.push_back(f);
             for (int f : up) tasks.push_back(f);
         }
@@ -193,17 +210,37 @@ public:
     }
 
     /**
-     * 获取下一个目标楼层（任务列表的第一个）
+     * 获取下一个目标楼层（任务列表的第一个，取绝对值）
      * @return 目标楼层，若无任务返回-1
      */
     int getNextTarget() {
-        return tasks.empty() ? -1 : tasks[0];
+        return tasks.empty() ? -1 : abs(tasks[0]);
+    }
+
+    /**
+     * 移除指定的外部任务（根据原始楼层，移除对应的负数任务）
+     * 用于动态重分配时，将请求从旧电梯中撤走
+     * @param floor 正数的请求楼层
+     */
+    void removeExternalTask(int floor) {
+        int target = -floor;   // 任务列表中存储的是负数
+        auto it = find(tasks.begin(), tasks.end(), target);
+        if (it != tasks.end()) {
+            tasks.erase(it);
+            optimizeTasks();   // 移除后重新优化顺序
+        }
     }
 };
 
 // ======================= 全局变量 =======================
 vector<Elevator> elevators;                 // 所有电梯对象
-queue<ExternalReq> extQueue;               // 等待分配的外部请求队列
+
+/**
+ * 动态分配版本：外部队列改为持久化列表，支持重分配
+ * 每个外部请求一旦创建就保存在此，直到服务完成才移除
+ */
+vector<ExternalReq> pendingRequests;        // 所有未完成的外部请求
+
 stack<vector<int>> emergencyBackup;        // 紧急模式时备份各电梯任务列表（栈）
 
 // ======================= 工具函数 =======================
@@ -221,11 +258,10 @@ bool isValidFloor(int floor) {
 
 /**
  * 选择最佳电梯响应外部请求（最短距离 + 方向惩罚）
+ * 与静态分配版本相同，但会在动态调度中反复调用
  * @param floor 请求楼层
  * @param dir   请求方向（上/下）
  * @return      最佳电梯的索引（0~g_elevatorNum-1），若失败返回-1
- * 策略：计算每个电梯到请求楼层的距离，并增加方向不顺路的惩罚（+100），选代价最小者
- * 贪心策略，减少乘客等待时间
  */
 int chooseBestElevator(int floor, int dir) {
     if (g_emergencyActive) return -1;   // 紧急模式下禁止分配
@@ -233,17 +269,14 @@ int chooseBestElevator(int floor, int dir) {
     int bestCost = INT_MAX;
     for (size_t i = 0; i < elevators.size(); ++i) {
         Elevator &e = elevators[i];
+        if (e.isFull()) continue;       // 满载电梯跳过
 
-        // 满载电梯无法再接人，直接跳过（代价无穷大）
-        if (e.isFull()) continue;
-
-        int cost = abs(e.curFloor - floor);   // 基础距离代价
-
+        int cost = abs(e.curFloor - floor);
         // 方向惩罚：如果电梯当前运行方向与请求方向相反且请求楼层在电梯后方，则代价大幅增加
         if (e.direction != DIR_STOP) {
             if ((dir == DIR_UP && e.direction == DIR_DOWN && floor < e.curFloor) ||
                 (dir == DIR_DOWN && e.direction == DIR_UP && floor > e.curFloor)) {
-                cost += 100;   // 不顺路，大幅增加代价
+                cost += 100;
             }
         }
         if (cost < bestCost) {
@@ -255,34 +288,71 @@ int chooseBestElevator(int floor, int dir) {
 }
 
 /**
- * 处理外部请求队列：将队列中的所有请求分配给最佳电梯
- * 每次分配后，请求即从队列中移除
+ * 动态调度：遍历所有未完成的外部请求，重新计算最佳电梯并分配（支持重分配）
+ * 这是实现动态分配的核心函数，会在以下时机自动调用：
+ *   1) 新外部请求加入时
+ *   2) 电梯每移动一步后
+ *   3) 紧急模式解除后
+ *   4) 外部请求服务完成后
+ * 工作流程：
+ *   - 对每个未完成的请求，调用 chooseBestElevator 寻找最佳电梯
+ *   - 若请求尚未分配，则直接分配给最佳电梯
+ *   - 若已分配但当前最佳电梯不同，则从旧电梯移除任务并转移至新电梯
+ *   - 最后清理所有已完成（completed）的请求
  */
 void dispatchRequests() {
     if (g_emergencyActive) {
         cout << "[调度] 紧急模式中，暂停所有外部请求分配。\n";
         return;
     }
-    while (!extQueue.empty()) {
-        ExternalReq req = extQueue.front();   // 查看队首，不立即弹出
+    for (auto &req : pendingRequests) {
+        if (req.completed) continue;   // 已完成的不再处理
+
         int best = chooseBestElevator(req.floor, req.dir);
         if (best == -1) {
-            // 无法分配（全部满载或紧急），保留请求等待下次调度
-            cout << "[调度] 请求 " << req.floor << " 层 "
-                 << (req.dir == DIR_UP ? "↑" : "↓")
-                 << " 暂时无法分配（可能全部满载），等待下次调度。\n";
-            break;
+            // 无法分配（全部满载或不可用），保留原有分配不变
+            if (req.assignedElevator != -1) {
+                cout << "[调度] 请求 " << req.floor << " 层 "
+                     << (req.dir == DIR_UP ? "↑" : "↓")
+                     << " 保留在电梯 " << req.assignedElevator + 1 << "（当前无更优空闲电梯）\n";
+            } else {
+                cout << "[调度] 请求 " << req.floor << " 层 "
+                     << (req.dir == DIR_UP ? "↑" : "↓")
+                     << " 暂时无法分配（全部满载或紧急），等待下次调度。\n";
+            }
+            continue;
         }
-        extQueue.pop();   // 确认能分配后再弹出
-        elevators[best].addTask(req.floor);
-        cout << "[调度] 外部请求 " << req.floor << " 层 "
-             << (req.dir == DIR_UP ? "↑" : "↓")
-             << " 分配给电梯 " << best+1 << endl;
+
+        if (req.assignedElevator == -1) {
+            // 新请求：直接分配
+            elevators[best].addExternalTask(req.floor);
+            req.assignedElevator = best;
+            cout << "[调度] 外部请求 " << req.floor << " 层 "
+                 << (req.dir == DIR_UP ? "↑" : "↓")
+                 << " 分配给电梯 " << best + 1 << endl;
+        } else if (req.assignedElevator != best) {
+            // 已分配但当前最佳电梯变了，进行重分配
+            int oldElev = req.assignedElevator;
+            elevators[oldElev].removeExternalTask(req.floor);  // 从旧电梯移除负数任务
+            elevators[best].addExternalTask(req.floor);        // 加入新电梯
+            req.assignedElevator = best;
+            cout << "[重调度] 请求 " << req.floor << " 层 "
+                 << (req.dir == DIR_UP ? "↑" : "↓")
+                 << " 从电梯 " << oldElev + 1 << " 转移至电梯 " << best + 1 << endl;
+        }
+        // 如果分配未变，保持原样
     }
+
+    // 清理已完成的请求（从持久化列表中移除）
+    pendingRequests.erase(
+        remove_if(pendingRequests.begin(), pendingRequests.end(),
+                  [](const ExternalReq &r) { return r.completed; }),
+        pendingRequests.end());
 }
 
 /**
  * 显示所有电梯的当前状态：位置、方向、门状态、任务列表、外部请求队列大小
+ * 动态分配版本：增加显示未完成请求的分配情况
  */
 void showStatus() {
     cout << "\n========== 电梯状态 ==========\n";
@@ -297,22 +367,34 @@ void showStatus() {
         cout << " | 乘客数 " << e.passengerCount();
         cout << " | 任务列表 [";
         for (size_t j = 0; j < e.tasks.size(); ++j) {
-            cout << e.tasks[j];
+            // 动态分配：负数任务显示为 楼层- （例如 -5 显示为 5-）
+            int val = e.tasks[j];
+            if (val < 0) cout << -val << "-";
+            else cout << val;
             if (j != e.tasks.size()-1) cout << ",";
         }
         cout << "]\n";
     }
-    cout << "外部请求队列大小: " << extQueue.size() << endl;
+    cout << "外部请求数量: " << pendingRequests.size();
+    if (!pendingRequests.empty()) {
+        cout << " （";
+        for (size_t i = 0; i < pendingRequests.size(); ++i) {
+            if (i > 0) cout << ", ";
+            cout << pendingRequests[i].floor << (pendingRequests[i].dir == DIR_UP ? "↑" : "↓")
+                 << "->电梯" << (pendingRequests[i].assignedElevator == -1 ? "?" : to_string(pendingRequests[i].assignedElevator + 1));
+        }
+        cout << "）";
+    }
+    cout << endl;
     cout << "紧急模式: " << (g_emergencyActive ? "激活" : "关闭") << endl;
     cout << "================================\n";
 }
 
 /**
  * 电梯移动一步（模拟一个时间单位）
- * 逻辑：
- *   - 若无任务，方向置停，返回
- *   - 若已到达目标楼层，开门（模拟）、关门、移除任务、重新优化任务顺序
- *   - 否则向目标楼层移动一层，并更新方向
+ * 动态分配版本：
+ *   - 到达目标楼层时，若为外部请求（负数任务），自动标记对应请求完成，并触发重调度
+ *   - 每移动一层后，自动调用 dispatchRequests() 进行动态重分配
  */
 void moveOneStep(Elevator &e) {
     int target = e.getNextTarget();
@@ -321,7 +403,10 @@ void moveOneStep(Elevator &e) {
         return;
     }
     if (e.curFloor == target) {
-        // 如果处于紧急模式且电梯内有乘客，到达任何楼层都应开门疏散
+        // 检查当前任务是否为外部请求（任务值小于0）
+        bool isExternalTask = !e.tasks.empty() && e.tasks[0] < 0;
+        
+        // 紧急模式处理（保持不变）
         if (g_emergencyActive && e.hasPassenger()) {
             if (!e.isOpen) {
                 e.isOpen = true;
@@ -330,7 +415,6 @@ void moveOneStep(Elevator &e) {
                 e.isOpen = false;
                 e.popTask();
                 cout << "电梯 " << e.id+1 << " 疏散完毕，关门\n";
-                // 紧急模式下疏散后不再执行剩余任务，清空任务列表
                 e.tasks.clear();
                 return;
             }
@@ -341,13 +425,29 @@ void moveOneStep(Elevator &e) {
             e.isOpen = true;
             cout << "电梯 " << e.id+1 << " 到达 " << e.curFloor << " 层，开门\n";
         }
-        // 正常下客
-        e.alightPassengersAt(e.curFloor);
-        // 关门并移除该任务（模拟乘客进出后关门）
+
+        if (isExternalTask) {
+            // 外部请求任务：服务完成，标记所有分配给本梯的该楼层请求为已完成
+            for (auto &req : pendingRequests) {
+                if (!req.completed && req.floor == e.curFloor && req.assignedElevator == e.id) {
+                    req.completed = true;
+                    cout << "电梯 " << e.id+1 << " 完成外部请求 " << req.floor 
+                         << " 层 " << (req.dir == DIR_UP ? "↑" : "↓") << " 的服务。\n";
+                }
+            }
+        } else {
+            // 内部送客任务
+            e.alightPassengersAt(e.curFloor);
+        }
+
+        // 关门并移除该任务
         e.isOpen = false;
         e.popTask();
         cout << "电梯 " << e.id+1 << " 关门，继续运行\n";
         e.optimizeTasks();   // 任务变化后重新规划顺序
+
+        // 外部请求完成后，立即进行一次重分配（可能会把未分配的请求交给更合适的电梯）
+        dispatchRequests();
         return;
     }
     // 未到达，移动一层
@@ -359,6 +459,8 @@ void moveOneStep(Elevator &e) {
         e.curFloor--;
     }
     cout << "电梯 " << e.id+1 << " 移动到 " << e.curFloor << " 层\n";
+    // 位置改变后，触发动态重调度（可能转移未服务的请求）
+    dispatchRequests();
 }
 
 /**
@@ -384,6 +486,7 @@ void runUntilIdle() {
 
 /**
  * 单步运行：所有电梯同时移动一步（若有任务），否则提示空闲
+ * 动态分配版本：移动后触发全局重调度
  */
 void stepOne() {
     bool moved = false;
@@ -394,17 +497,13 @@ void stepOne() {
         }
     }
     if (!moved) cout << "所有电梯空闲，无动作。\n";
+    else dispatchRequests();  // 步进后重新调度
 }
 
 // ---------- 紧急模式（安全楼层固定为1层） ----------
 /**
  * 执行紧急模式，根据不同类型计算目标安全楼层，并区分电梯是否有人
- * @param type          紧急类型：FIRE/FAULT/FLOOD/EARTHQUAKE
- * @param dangerFloor   危险楼层（火灾为着火层，水浸为进水层，其它忽略）
- * 规则：
- *   - 火灾/故障 → 有乘客就近非着火层疏散，无乘客回基站（1层）
- *   - 水浸 → 有乘客就近非进水层疏散，无乘客前往进水层+2
- *   - 地震 → 无论是否有乘客，就近停靠开门疏散，之后停用
+ * 与原版完全相同，未做修改
  */
 void emergencyMode(EmergType type, int dangerFloor = 0) {
     if (g_emergencyActive) {
@@ -415,20 +514,20 @@ void emergencyMode(EmergType type, int dangerFloor = 0) {
     cout << "\n!!! 紧急模式触发 !!!\n";
     int targetFloor;
     string reason;
-    int avoidFloor = -1;   // 需避开的具体危险楼层
+    int avoidFloor = -1;
 
     switch (type) {
         case FIRE:
             reason = "火灾";
             avoidFloor = dangerFloor;
             if (avoidFloor < g_minFloor || avoidFloor > g_maxFloor) avoidFloor = -1;
-            targetFloor = 1;                      // 固定首层
+            targetFloor = 1;
             if (targetFloor < g_minFloor || targetFloor > g_maxFloor)
                 targetFloor = g_minFloor;
             break;
         case FAULT:
             reason = "故障";
-            targetFloor = 1;                      // 返基站也去首层
+            targetFloor = 1;
             if (targetFloor < g_minFloor || targetFloor > g_maxFloor)
                 targetFloor = g_minFloor;
             break;
@@ -441,8 +540,7 @@ void emergencyMode(EmergType type, int dangerFloor = 0) {
             break;
         case EARTHQUAKE:
             reason = "地震";
-            // 地震就近停靠，无特定危险楼层和统一目标
-            targetFloor = -1;   // 表示“就近处理”
+            targetFloor = -1;
             break;
     }
     cout << "原因：" << reason;
@@ -469,26 +567,20 @@ void emergencyMode(EmergType type, int dangerFloor = 0) {
         Elevator &e = elevators[i];
 
         if (e.hasPassenger()) {
-            // 有乘客：就近找安全楼层疏散
             int safeStop = e.curFloor;
-            // 如果当前楼层是危险楼层，必须移到相邻安全层
             if (avoidFloor != -1 && e.curFloor == avoidFloor) {
                 safeStop = (e.curFloor < g_maxFloor) ? e.curFloor + 1 : e.curFloor - 1;
-                // 再次检查，防止相邻层也是危险层（极小概率，但安全起见）
                 if (safeStop == avoidFloor) {
                     safeStop = (safeStop < g_maxFloor) ? safeStop + 1 : safeStop - 1;
                 }
             }
-            // 确保安全楼层合法
             if (safeStop < g_minFloor) safeStop = g_minFloor;
             if (safeStop > g_maxFloor) safeStop = g_maxFloor;
 
             if (type == EARTHQUAKE) {
-                // 地震：就近停靠疏散，不再去其他楼层
                 if (e.curFloor != safeStop) e.addTask(safeStop);
                 cout << "电梯 " << e.id+1 << " 内有乘客，地震就近疏散至 " << safeStop << " 层。\n";
             } else {
-                // 火灾/水浸/故障：先疏散乘客，再前往基站（如疏散层不是基站）
                 e.addTask(safeStop);
                 if (safeStop != targetFloor)
                     e.addTask(targetFloor);
@@ -496,14 +588,11 @@ void emergencyMode(EmergType type, int dangerFloor = 0) {
                      << " 层，随后前往基站 " << targetFloor << " 层。\n";
             }
         } else {
-            // 无乘客：直接去安全楼层并停用
             if (type == EARTHQUAKE) {
-                // 地震无乘客也就近去基站（1层）停用
                 int base = (1 >= g_minFloor && 1 <= g_maxFloor) ? 1 : g_minFloor;
                 if (e.curFloor != base) e.addTask(base);
                 cout << "电梯 " << e.id+1 << " 无乘客，地震直接前往基站 " << base << " 层并停止服务。\n";
             } else {
-                // 其他紧急类型：前往计算出的安全楼层
                 if (e.curFloor != targetFloor) e.addTask(targetFloor);
                 cout << "电梯 " << e.id+1 << " 无乘客，直接前往安全楼层 " << targetFloor << " 层。\n";
             }
@@ -522,7 +611,7 @@ void emergencyMode() {
 
 /**
  * 解除紧急模式，恢复之前备份的任务
- * 注意：备份栈的弹出顺序要对应电梯编号（后进先出，这里使用逆序恢复）
+ * 与原版相同，但恢复后立即触发一次动态调度
  */
 void recoverFromEmergency() {
     if (!g_emergencyActive) {
@@ -534,22 +623,21 @@ void recoverFromEmergency() {
     // 注意：备份栈的弹出顺序与电梯编号相反（因为压栈时从0到N-1）
     for (int i = elevators.size() - 1; i >= 0; --i) {
         if (!emergencyBackup.empty()) {
-            vector<int> backupTasks = emergencyBackup.top();  // 获取备份
+            vector<int> backupTasks = emergencyBackup.top();
             emergencyBackup.pop();
-
-            // 合并：将备份任务逐个加入当前电梯（保留当前任务，如紧急期间产生的新请求）
             for (int floor : backupTasks) {
-                elevators[i].addTask(floor);   // addTask 内部会调用 optimizeTasks
+                // 恢复的任务统一视为内部请求（正数），外部请求由 pendingRequests 重新分配
+                elevators[i].addTask(floor);
             }
-            // 由于 addTask 每次都会优化，最终任务列表会按 LOOK 顺序排好
         }
     }
+    dispatchRequests();   // 恢复后立即进行动态调度，重新分配未完成的外部请求
     cout << "任务恢复完成。\n";
 }
 
 /**
  * 管理员手动控制菜单（交互式）
- * 可对指定电梯：1-强制前往某层  2-强制开关门  3-添加内部请求
+ * 与原版完全相同
  */
 void manualControl() {
     int id, cmd, floor;
@@ -582,7 +670,7 @@ void manualControl() {
 
 /**
  * 交互式添加外部呼叫
- * 输入楼层和方向，加入外部队列后立即尝试分配
+ * 动态分配版本：请求加入 pendingRequests 并立即触发调度
  */
 void addExternal() {
     if (g_emergencyActive) {
@@ -598,56 +686,45 @@ void addExternal() {
         cout << "输入无效\n";
         return;
     }
-    extQueue.push({floor, dir});
-    cout << "外部请求已加入队列，稍后将由调度器分配。\n";
-    dispatchRequests();   // 立即分配一次
+    // 创建新请求，初始未分配
+    pendingRequests.push_back({floor, dir, -1, false});
+    cout << "外部请求已加入，系统将动态分配。\n";
+    dispatchRequests();   // 立即尝试分配
 }
 
 // ======================= 文件测试相关 =======================
 
 /**
- * 重置系统：清空所有电梯、外部队列、备份栈，根据全局 g_elevatorNum 重新创建电梯
+ * 重置系统：清空所有电梯、请求列表、备份栈，根据全局 g_elevatorNum 重新创建电梯
  */
 void resetSystem() {
     elevators.clear();
     for (int i=0; i<g_elevatorNum; ++i) {
         elevators.push_back(Elevator(i));
     }
-    while (!extQueue.empty()) extQueue.pop();
+    pendingRequests.clear();
     while (!emergencyBackup.empty()) emergencyBackup.pop();
     g_emergencyActive = false;
 }
 
 /**
  * 从指定文件读取测试指令并执行（支持中文文件名）
- * 支持的命令：
- *   EXT floor dir         - 添加外部请求
- *   INT elevatorId floor  - 添加内部请求（指定电梯）
- *   BOARD eid target      - 模拟乘客上梯（电梯号 目标楼层）
- *   EMERGENCY [类型]      - 触发紧急模式（FIRE/FAULT/FLOOD/EARTHQUAKE）
- *   RECOVER               - 解除紧急模式
- *   STEP steps            - 单步运行指定步数
- *   RUN                   - 运行直到空闲
- *   SHOW                  - 显示当前状态
- *   MANUAL eid cmd arg    - 管理员手动干预（1-强制任务, 2-开关门, 3-内部请求）
- *   以 '#' 开头的行视为注释，跳过
- * @param filename 测试文件名（支持 UTF-8 中文路径）
+ * 支持的命令不变，但外部请求改为使用 pendingRequests
  */
 void runTestFromFile(const string& filename) {
     ifstream infile;
-    infile.open(fs::u8path(filename));          // 使用 filesystem 支持中文路径
+    infile.open(fs::u8path(filename));
     if (!infile.is_open()) {
         cout << "无法打开文件: " << filename << endl;
         return;
     }
-    resetSystem();                              // 每次运行前重置系统
+    resetSystem();
     cout << "\n========== 开始运行测试文件：" << filename << " ==========\n";                         
     string line;
     while (getline(infile, line)) {
-        // 去除行首空白字符，跳过空行和注释行
         size_t pos = line.find_first_not_of(" \t");
         if (pos == string::npos || line[pos] == '#') continue;
-        line = line.substr(pos);                // 截去前导空白
+        line = line.substr(pos);
         
         istringstream iss(line);
         string cmd;
@@ -664,7 +741,7 @@ void runTestFromFile(const string& filename) {
                 cout << "[文件] 紧急模式，外部请求被忽略。\n";
                 continue;
             }
-            extQueue.push({floor, dir});
+            pendingRequests.push_back({floor, dir, -1, false});
             cout << "[文件] 外部请求: " << floor << "层 " << (dir==1?"↑":"↓") << endl;
             dispatchRequests();
         }
@@ -716,7 +793,7 @@ void runTestFromFile(const string& filename) {
                         }
                         emergencyMode(FIRE, fireFloor);
                     } else {
-                        emergencyMode(FIRE, 1);   // 默认1层着火
+                        emergencyMode(FIRE, 1);
                     }
                 }
                 else if (sub == "FAULT") emergencyMode(FAULT);
@@ -739,7 +816,7 @@ void runTestFromFile(const string& filename) {
                     cout << "[文件] 未知紧急类型: " << sub << endl;
                 }
             } else {
-                emergencyMode();   // 默认火灾
+                emergencyMode();
             }
         }
         else if (cmd == "RECOVER") recoverFromEmergency();
@@ -757,7 +834,7 @@ void runTestFromFile(const string& filename) {
                 continue;
             }
             Elevator &e = elevators[eid-1];
-            if (mcmd == 1 || mcmd == 3) {   // 强制任务 或 内部请求
+            if (mcmd == 1 || mcmd == 3) {
                 if (!isValidFloor(arg)) {
                     cout << "[文件] 错误：楼层 " << arg << " 超出范围\n";
                     continue;
@@ -767,7 +844,7 @@ void runTestFromFile(const string& filename) {
                     cout << "[文件] 管理员：电梯" << eid << " 强制前往 " << arg << " 层" << endl;
                 else
                     cout << "[文件] 管理员：电梯" << eid << " 内部请求 " << arg << " 层" << endl;
-            } else if (mcmd == 2) {   // 开关门
+            } else if (mcmd == 2) {
                 e.isOpen = (arg == 1);
                 cout << "[文件] 管理员：电梯" << eid << " 门" << (e.isOpen?"开":"关") << endl;
             }

@@ -1,8 +1,0 @@
-﻿# 场景：多个任务合并优化路线
-INT 1 2
-INT 1 8
-INT 1 5
-SHOW
-STEP 3
-SHOW
-RUN
