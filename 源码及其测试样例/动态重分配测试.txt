@@ -1,0 +1,14 @@
+﻿# 动态重分配测试：观察外部请求在不同电梯间转移
+# 先让电梯1去高层，电梯2去低层，再添加反方向请求，应触发重分配
+INT 1 8
+INT 2 2
+STEP 2
+SHOW
+EXT 4 -1
+STEP 1
+SHOW
+EXT 6 1
+STEP 3
+SHOW
+RUN
+SHOW

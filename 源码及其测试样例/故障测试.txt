@@ -1,0 +1,3 @@
+﻿# 故障测试：直接触发故障，电梯应归基站
+EMERGENCY FAULT
+SHOW

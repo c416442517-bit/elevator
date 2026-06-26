@@ -1,0 +1,9 @@
+﻿# 紧急恢复测试：触发火灾后恢复，观察任务是否还原
+INT 1 5
+EXT 3 1
+SHOW
+EMERGENCY FIRE 2
+SHOW
+RECOVER
+SHOW
+RUN

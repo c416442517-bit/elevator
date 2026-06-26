@@ -1,0 +1,10 @@
+﻿# 基本功能测试：外部请求、内部请求、单步运行、显示状态
+EXT 3 1
+SHOW
+STEP 3
+SHOW
+INT 2 5
+STEP 5
+SHOW
+RUN
+SHOW

@@ -1,0 +1,9 @@
+﻿# 管理员手动控制：强制电梯1去7楼，开关门，内部请求
+MANUAL 1 1 7
+STEP 2
+SHOW
+MANUAL 2 2 0
+SHOW
+MANUAL 1 3 3
+STEP 5
+SHOW

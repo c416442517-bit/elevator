@@ -1,0 +1,6 @@
+﻿# 地震测试：电梯就近停靠开门疏散，然后停用
+BOARD 1 7
+STEP 3
+SHOW
+EMERGENCY EARTHQUAKE
+SHOW

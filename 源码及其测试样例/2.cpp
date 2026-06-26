@@ -36,7 +36,7 @@ bool g_emergencyActive = false;
 /**
  * 外部呼叫请求结构体
  * 当乘客在某一楼层按下上行/下行按钮时产生
- * 动态分配版本新增字段：assignedElevator（当前分配的电梯索引，-1表示未分配）
+ * 动态分配版本新增字段：assignedElevator（当前分配的电梯编号，-1表示未分配）
  *                    completed（该请求是否已完成服务）
  */
 struct ExternalReq {
@@ -855,13 +855,23 @@ void runTestFromFile(const string& filename) {
 }
 
 /**
- * 显示预置的测试样例列表（可根据需要自行扩充）
+ * 显示预置的测试样例列表，覆盖所有场景（含新增的动态分配、满载、恢复等）
+ * 用户通过数字选择即可自动执行对应的测试文件
  */
 void runSample() {
+    // 包含所有场景的测试样例文件名列表（共11个）
     vector<string> samples = {
+        "基本功能测试.txt",
+        "动态重分配测试.txt",
+        "乘客与满载测试.txt",
         "火灾有人测试.txt",
         "火灾无人测试.txt",
-        "地震测试.txt"
+        "积水测试.txt",
+        "故障测试.txt",
+        "地震测试.txt",
+        "紧急恢复测试.txt",
+        "管理员手动测试.txt",
+        "综合场景测试.txt"
     };
 
     while (true) {

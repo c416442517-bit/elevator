@@ -1,0 +1,6 @@
+﻿# 积水测试：2楼进水，电梯内有乘客去6楼，应先就近疏散再归位
+BOARD 3 6
+STEP 1
+SHOW
+EMERGENCY FLOOD 2
+SHOW

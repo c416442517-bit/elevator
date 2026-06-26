@@ -1,0 +1,21 @@
+﻿# 乘客与满载测试：模拟乘客上梯，达到超重限制
+# 假设人均70kg，1000kg上限，最多14人
+BOARD 1 5
+BOARD 1 5
+BOARD 1 5
+BOARD 1 5
+BOARD 1 5
+BOARD 1 5
+BOARD 1 5
+BOARD 1 5
+BOARD 1 5
+BOARD 1 5
+BOARD 1 5
+BOARD 1 5
+BOARD 1 5
+BOARD 1 5
+# 第15人应超重
+BOARD 1 5
+SHOW
+RUN
+SHOW

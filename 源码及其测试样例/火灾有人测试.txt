@@ -1,0 +1,6 @@
+﻿# 火灾测试（电梯内有人）：2号梯载客去5楼，途中3楼着火
+BOARD 2 5
+STEP 2
+SHOW
+EMERGENCY FIRE 3
+SHOW
