@@ -59,6 +59,10 @@ struct Task {
     bool isExternal;    // true 表示外部接客任务，false 表示内部送客任务
 };
 
+// ========== 新增：前置声明外部请求列表，供 Elevator::addTask 使用 ==========
+extern vector<ExternalReq> pendingRequests;
+// ==========================================================================
+
 /**
  * 电梯类：封装单部电梯的所有属性和行为
  * 动态分配版本：任务列表中的负数表示外部接客任务，正数为内部送客任务
@@ -147,24 +151,33 @@ public:
      * @param isExternal 是否为外部请求（用于将楼层转为负数存储）
      */
     void addTask(int floor, bool isExternal = false) {
-        // 同层请求：直接开门完成
-        if (floor == curFloor) {
-            if (isExternal) {
-                if (!isOpen) {
-                    isOpen = true;
-                    cout << "电梯 " << id+1 << " 在 " << curFloor << " 层已开门（同层响应）\n";
-                    // 外部请求会在 moveOneStep 中标记完成，此处仅模拟开门
-                    isOpen = false;
-                    cout << "电梯 " << id+1 << " 关门（服务完成）\n";
+    // 同层请求：直接开门完成
+    if (floor == curFloor) {
+        if (isExternal) {
+            // 优化：直接标记 pendingRequests 中对应请求为已完成，避免幽灵请求
+            for (auto &req : pendingRequests) {
+                if (!req.completed && req.floor == floor) {
+                    req.completed = true;
+                    cout << "电梯 " << id+1 << " 在 " << curFloor 
+                         << " 层完成同层外部请求 " << floor 
+                         << (req.dir == DIR_UP ? "↑" : "↓") << " 的服务。\n";
+                    break; // 完成一个匹配请求即可（通常只有一个同楼层同方向的请求）
                 }
             }
-            // 内部请求同层忽略（已在目标层）
-            return;
+            if (!isOpen) {
+                isOpen = true;
+                cout << "电梯 " << id+1 << " 在 " << curFloor << " 层已开门（同层响应）\n";
+                // 外部请求会在 moveOneStep 中标记完成，此处仅模拟开门
+                isOpen = false;
+                cout << "电梯 " << id+1 << " 关门（服务完成）\n";
+            }
         }
-        tasks.push_back({floor, isExternal});
-        optimizeTasks();    // 每次添加后优化顺序
+        // 内部请求同层忽略（已在目标层）
+        return;
     }
-
+    tasks.push_back({floor, isExternal});
+    optimizeTasks();    // 每次添加后优化顺序
+}
     /**
      * 专门添加外部请求任务（传入正数楼层，内部转为负数）
      */
@@ -461,7 +474,12 @@ void moveOneStep(Elevator &e) {
         e.isOpen = false;
         e.popTask();
         cout << "电梯 " << e.id+1 << " 关门，继续运行\n";
-        e.optimizeTasks();   // 任务变化后重新规划顺序
+
+        // ========== 修改：仅在非紧急模式下重排序 ==========
+        if (!g_emergencyActive) {
+            e.optimizeTasks();   // 任务变化后重新规划顺序
+        }
+        // ==========================================
 
         // 外部请求完成后，立即进行一次重分配（可能会把未分配的请求交给更合适的电梯）
         dispatchRequests();
@@ -479,7 +497,6 @@ void moveOneStep(Elevator &e) {
     // 位置改变后，触发动态重调度（可能转移未服务的请求）
     dispatchRequests();
 }
-
 /**
  * 连续运行所有电梯，直到所有任务完成为止
  * 每次循环中，所有电梯同时移动一步（模拟并发）
@@ -572,19 +589,31 @@ void emergencyMode(EmergType type, int dangerFloor = 0) {
             cout << "电梯 " << i+1 << " 强制关门\n";
         }
     }
-    // 备份当前任务并清空，将所有电梯任务改为紧急任务
+    // 备份当前任务并清空
     while (!emergencyBackup.empty()) emergencyBackup.pop();
     for (size_t i = 0; i < elevators.size(); ++i) {
         emergencyBackup.push(elevators[i].tasks);
         elevators[i].tasks.clear();
     }
 
-    // 为每部电梯生成紧急任务
+    // ========== 为每部电梯生成紧急任务（直接操作 tasks，不调用 addTask） ==========
     for (size_t i = 0; i < elevators.size(); ++i) {
         Elevator &e = elevators[i];
 
         if (e.hasPassenger()) {
+            // ----- 水浸特殊处理：有人电梯直接前往安全楼层，不就近停靠 -----
+            if (type == FLOOD) {
+                if (e.curFloor != targetFloor) {
+                    e.tasks.push_back({targetFloor, false});
+                    e.direction = (targetFloor > e.curFloor) ? DIR_UP : DIR_DOWN;
+                }
+                cout << "电梯 " << e.id+1 << " 内有乘客，水浸直接前往安全楼层 " << targetFloor << " 层。\n";
+                continue;   // 跳过后续处理
+            }
+
+            // ----- 其他紧急类型（火灾、故障、地震）先就近疏散 -----
             int safeStop = e.curFloor;
+            // 避开危险楼层（着火层）
             if (avoidFloor != -1 && e.curFloor == avoidFloor) {
                 safeStop = (e.curFloor < g_maxFloor) ? e.curFloor + 1 : e.curFloor - 1;
                 if (safeStop == avoidFloor) {
@@ -594,31 +623,45 @@ void emergencyMode(EmergType type, int dangerFloor = 0) {
             if (safeStop < g_minFloor) safeStop = g_minFloor;
             if (safeStop > g_maxFloor) safeStop = g_maxFloor;
 
+            e.tasks.clear();   // 确保清空（实际上已经清空，但保险）
+
             if (type == EARTHQUAKE) {
-                if (e.curFloor != safeStop) e.addTask(safeStop);
+                if (e.curFloor != safeStop) {
+                    e.tasks.push_back({safeStop, false});
+                    e.direction = (safeStop > e.curFloor) ? DIR_UP : DIR_DOWN;
+                }
                 cout << "电梯 " << e.id+1 << " 内有乘客，地震就近疏散至 " << safeStop << " 层。\n";
-            } else {
-                e.addTask(safeStop);
-                if (safeStop != targetFloor)
-                    e.addTask(targetFloor);
+            } else {  // FIRE 或 FAULT
+                e.tasks.push_back({safeStop, false});
+                if (safeStop != targetFloor) {
+                    e.tasks.push_back({targetFloor, false});
+                }
+                e.direction = (safeStop > e.curFloor) ? DIR_UP : DIR_DOWN;
                 cout << "电梯 " << e.id+1 << " 内有乘客，就近疏散至 " << safeStop 
                      << " 层，随后前往基站 " << targetFloor << " 层。\n";
             }
         } else {
+            // ----- 无乘客电梯 -----
             if (type == EARTHQUAKE) {
                 int base = (1 >= g_minFloor && 1 <= g_maxFloor) ? 1 : g_minFloor;
-                if (e.curFloor != base) e.addTask(base);
+                if (e.curFloor != base) {
+                    e.tasks.push_back({base, false});
+                    e.direction = (base > e.curFloor) ? DIR_UP : DIR_DOWN;
+                }
                 cout << "电梯 " << e.id+1 << " 无乘客，地震直接前往基站 " << base << " 层并停止服务。\n";
             } else {
-                if (e.curFloor != targetFloor) e.addTask(targetFloor);
+                if (e.curFloor != targetFloor) {
+                    e.tasks.push_back({targetFloor, false});
+                    e.direction = (targetFloor > e.curFloor) ? DIR_UP : DIR_DOWN;
+                }
                 cout << "电梯 " << e.id+1 << " 无乘客，直接前往安全楼层 " << targetFloor << " 层。\n";
             }
         }
     }
+    // ==========================================
 
     runUntilIdle();  // 执行归位/疏散
 }
-
 /**
  * 无参数的紧急模式，默认触发火灾（着火层为1）
  */
