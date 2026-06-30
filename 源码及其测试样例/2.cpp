@@ -53,6 +53,12 @@ struct Passenger {
     int target;      // 目标楼层
 };
 
+// 任务结构体：区分内部送客与外部接客，支持负楼层
+struct Task {
+    int floor;          // 目标楼层（实际值，可正可负）
+    bool isExternal;    // true 表示外部接客任务，false 表示内部送客任务
+};
+
 /**
  * 电梯类：封装单部电梯的所有属性和行为
  * 动态分配版本：任务列表中的负数表示外部接客任务，正数为内部送客任务
@@ -63,7 +69,7 @@ public:
     int curFloor;           // 当前所在楼层
     int direction;          // 当前运动方向（上/下/停）
     bool isOpen;            // 门状态：true开，false关
-    vector<int> tasks;      // 任务列表：需要停靠的楼层（正数=内部送客，负数=-外部接客楼层）
+    vector<Task> tasks;     // 任务列表：需要停靠的楼层（正数=内部送客，负数=-外部接客楼层）
 
     // 载重相关
     static constexpr double MAX_LOAD = 1000.0;        // 最大承重(kg)，可根据需要修改
@@ -141,19 +147,21 @@ public:
      * @param isExternal 是否为外部请求（用于将楼层转为负数存储）
      */
     void addTask(int floor, bool isExternal = false) {
-        int taskFloor = isExternal ? -floor : floor;   // 外部请求存储为负数，内部请求保持正数
-        if (taskFloor == curFloor || -taskFloor == curFloor) {
-            // 同层请求：直接开门完成
-            if (!isOpen) {
-                isOpen = true;
-                cout << "电梯 " << id+1 << " 在 " << curFloor << " 层已开门（同层响应）\n";
-                // 外部请求会在 moveOneStep 中标记完成，此处仅模拟开门
-                isOpen = false;
-                cout << "电梯 " << id+1 << " 关门（服务完成）\n";
+        // 同层请求：直接开门完成
+        if (floor == curFloor) {
+            if (isExternal) {
+                if (!isOpen) {
+                    isOpen = true;
+                    cout << "电梯 " << id+1 << " 在 " << curFloor << " 层已开门（同层响应）\n";
+                    // 外部请求会在 moveOneStep 中标记完成，此处仅模拟开门
+                    isOpen = false;
+                    cout << "电梯 " << id+1 << " 关门（服务完成）\n";
+                }
             }
+            // 内部请求同层忽略（已在目标层）
             return;
         }
-        tasks.push_back(taskFloor);
+        tasks.push_back({floor, isExternal});
         optimizeTasks();    // 每次添加后优化顺序
     }
 
@@ -172,33 +180,42 @@ public:
     void optimizeTasks() {
         if (tasks.empty()) return;
 
-        // 先按绝对值升序排序
-        sort(tasks.begin(), tasks.end(), [](int a, int b) {
-            return abs(a) < abs(b);
+        // 移除恰好等于当前楼层的任务（避免原地踏步）
+        tasks.erase(remove_if(tasks.begin(), tasks.end(),
+                    [this](const Task& t) { return t.floor == curFloor; }),
+                    tasks.end());
+
+        if (tasks.empty()) return;
+
+        // 先按楼层升序排序
+        sort(tasks.begin(), tasks.end(), [](const Task& a, const Task& b) {
+            return a.floor < b.floor;
         });
 
-        // 将任务分为上行任务（绝对值大于当前楼层）和下行任务（绝对值小于当前楼层）
-        vector<int> up, down;
-        for (int f : tasks) {
-            int absF = abs(f);
-            if (absF > curFloor) up.push_back(f);
-            else if (absF < curFloor) down.push_back(f);
-            // 等于当前楼层的任务忽略（已在当前层，后续到达时会立即处理）
+        // 将任务分为上行任务（楼层大于当前楼层）和下行任务（楼层小于当前楼层）
+        vector<Task> up, down;
+        for (const Task& t : tasks) {
+            if (t.floor > curFloor) up.push_back(t);
+            else down.push_back(t);   // floor < curFloor
         }
 
-        // 分别排序：上行升序（按绝对值），下行降序（按绝对值）
-        sort(up.begin(), up.end(), [](int a, int b) { return abs(a) < abs(b); });
-        sort(down.begin(), down.end(), [](int a, int b) { return abs(a) > abs(b); });
+        // 分别排序：上行升序，下行降序
+        sort(up.begin(), up.end(), [](const Task& a, const Task& b) {
+            return a.floor < b.floor;
+        });
+        sort(down.begin(), down.end(), [](const Task& a, const Task& b) {
+            return a.floor > b.floor;
+        });
 
         tasks.clear();
 
         // 根据当前方向决定任务顺序
         if (direction == DIR_UP || (direction == DIR_STOP && !up.empty())) {
-            for (int f : up) tasks.push_back(f);    // 先上
-            for (int f : down) tasks.push_back(f);  // 后下
+            for (const Task& t : up) tasks.push_back(t);    // 先上
+            for (const Task& t : down) tasks.push_back(t);  // 后下
         } else {
-            for (int f : down) tasks.push_back(f);
-            for (int f : up) tasks.push_back(f);
+            for (const Task& t : down) tasks.push_back(t);
+            for (const Task& t : up) tasks.push_back(t);
         }
     }
 
@@ -214,7 +231,7 @@ public:
      * @return 目标楼层，若无任务返回-1
      */
     int getNextTarget() {
-        return tasks.empty() ? -1 : abs(tasks[0]);
+        return tasks.empty() ? -1 : tasks[0].floor;
     }
 
     /**
@@ -223,8 +240,9 @@ public:
      * @param floor 正数的请求楼层
      */
     void removeExternalTask(int floor) {
-        int target = -floor;   // 任务列表中存储的是负数
-        auto it = find(tasks.begin(), tasks.end(), target);
+        auto it = find_if(tasks.begin(), tasks.end(), [floor](const Task& t) {
+            return t.floor == floor && t.isExternal;
+        });
         if (it != tasks.end()) {
             tasks.erase(it);
             optimizeTasks();   // 移除后重新优化顺序
@@ -241,7 +259,7 @@ vector<Elevator> elevators;                 // 所有电梯对象
  */
 vector<ExternalReq> pendingRequests;        // 所有未完成的外部请求
 
-stack<vector<int>> emergencyBackup;        // 紧急模式时备份各电梯任务列表（栈）
+stack<vector<Task>> emergencyBackup;        // 紧急模式时备份各电梯任务列表（栈）
 
 // ======================= 工具函数 =======================
 
@@ -367,10 +385,9 @@ void showStatus() {
         cout << " | 乘客数 " << e.passengerCount();
         cout << " | 任务列表 [";
         for (size_t j = 0; j < e.tasks.size(); ++j) {
-            // 动态分配：负数任务显示为 楼层- （例如 -5 显示为 5-）
-            int val = e.tasks[j];
-            if (val < 0) cout << -val << "-";
-            else cout << val;
+            const Task& t = e.tasks[j];
+            cout << t.floor;
+            if (t.isExternal) cout << "外";   // 标记外部任务
             if (j != e.tasks.size()-1) cout << ",";
         }
         cout << "]\n";
@@ -403,8 +420,8 @@ void moveOneStep(Elevator &e) {
         return;
     }
     if (e.curFloor == target) {
-        // 检查当前任务是否为外部请求（任务值小于0）
-        bool isExternalTask = !e.tasks.empty() && e.tasks[0] < 0;
+        // 检查当前任务是否为外部请求
+        bool isExternalTask = !e.tasks.empty() && e.tasks[0].isExternal;
         
         // 紧急模式处理（保持不变）
         if (g_emergencyActive && e.hasPassenger()) {
@@ -623,11 +640,13 @@ void recoverFromEmergency() {
     // 注意：备份栈的弹出顺序与电梯编号相反（因为压栈时从0到N-1）
     for (int i = elevators.size() - 1; i >= 0; --i) {
         if (!emergencyBackup.empty()) {
-            vector<int> backupTasks = emergencyBackup.top();
+            vector<Task> backupTasks = emergencyBackup.top();
             emergencyBackup.pop();
-            for (int floor : backupTasks) {
-                // 恢复的任务统一视为内部请求（正数），外部请求由 pendingRequests 重新分配
-                elevators[i].addTask(floor);
+            for (const Task& t : backupTasks) {
+                // 只恢复内部请求，外部请求由 pendingRequests 重新分配
+                if (!t.isExternal) {
+                    elevators[i].addTask(t.floor, false);
+                }
             }
         }
     }
